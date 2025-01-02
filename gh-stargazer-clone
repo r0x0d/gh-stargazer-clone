@@ -1,35 +1,161 @@
 #!/usr/bin/env bash
+
+# gh-stargazers-clone
+# A gh extension to clone repositories from a user's stargazers list, optionally filtered by a tag.
+# If no username is provided, it tries to use the authenticated GitHub user.
+# Skips repositories that are already cloned locally.
+# Use --all to clone all starred repositories without TUI selection.
+# Ensures the list of repositories is unique.
+# Filters repositories by tag in name, description, or topics, handling null values.
+# Filters out empty values from the final list passed to fzf.
+# Supports --help to display usage information.
+
 set -e
 
-echo "Hello gh-stargazer-clone!"
+# Function to display usage
+usage() {
+  echo "Usage: gh stargazers-clone [--all] [username] [tag]"
+  echo "  --all:    Clone all starred repositories without TUI selection (optional)"
+  echo "  --help:   Show this help message"
+  echo "  username: GitHub username (optional, defaults to authenticated user)"
+  echo "  tag:      Optional tag to filter repositories (default: clone all)"
+  exit 0
+}
 
-# Snippets to help get started:
+# Function to check for a command and provide install instructions
+check_dependency() {
+  if ! command -v "$1" &> /dev/null; then
+    echo "Error: '$1' is not installed."
+    echo "Please install it using one of the following commands:"
+    if command -v apt &> /dev/null; then
+      echo "  sudo apt install $1"
+    elif command -v dnf &> /dev/null; then
+      echo "  sudo dnf install $1"
+    else
+      echo "  Your package manager is not supported. Please install '$1' manually."
+    fi
+    exit 1
+  fi
+}
 
-# Determine if an executable is in the PATH
-# if ! type -p ruby >/dev/null; then
-#   echo "Ruby not found on the system" >&2
-#   exit 1
-# fi
+# Check for dependencies
+check_dependency jq
+check_dependency fzf
 
-# Pass arguments through to another command
-# gh issue list "$@" -R cli/cli
+# Parse arguments
+CLONE_ALL=false
+USERNAME=""
+TAG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all)
+      CLONE_ALL=true
+      shift
+      ;;
+    --help)
+      usage
+      ;;
+    *)
+      if [ -z "$USERNAME" ]; then
+        USERNAME=$1
+      elif [ -z "$TAG" ]; then
+        TAG=$1
+      else
+        echo "Error: Too many arguments."
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
 
-# Using the gh api command to retrieve and format information
-# QUERY='
-#   query($endCursor: String) {
-#     viewer {
-#       repositories(first: 100, after: $endCursor) {
-#         nodes {
-#           nameWithOwner
-#           stargazerCount
-#         }
-#       }
-#     }
-#   }
-# '
-# TEMPLATE='
-#   {{- range $repo := .data.viewer.repositories.nodes -}}
-#     {{- printf "name: %s - stargazers: %v\n" $repo.nameWithOwner $repo.stargazerCount -}}
-#   {{- end -}}
-# '
-# exec gh api graphql -f query="${QUERY}" --paginate --template="${TEMPLATE}"
+# Try to fetch the authenticated GitHub user if no username is provided
+if [ -z "$USERNAME" ]; then
+  echo "No username provided. Trying to fetch the authenticated GitHub user..."
+  USERNAME=$(gh api user --jq '.login')
+  if [ -z "$USERNAME" ]; then
+    echo "Error: Could not fetch the authenticated GitHub user."
+    echo "Please provide a username or ensure you are logged in to GitHub CLI."
+    usage
+  else
+    echo "Using authenticated GitHub user: $USERNAME"
+  fi
+fi
+
+# Fetch the list of starred repositories
+echo "Fetching starred repositories for user $USERNAME..."
+if [ -z "$TAG" ]; then
+  # If no tag is provided, fetch all starred repositories
+  REPOS=$(gh api users/"$USERNAME"/starred --paginate | jq -r '.[].full_name')
+else
+  # If a tag is provided, filter repositories by tag in name, description, or topics
+  REPOS=$(gh api users/"$USERNAME"/starred --paginate | jq -r '
+    .[] | 
+    select(
+      (.name != null and (.name | contains("'"$TAG"'"))) or
+      (.description != null and (.description | contains("'"$TAG"'"))) or
+      (.topics != null and (.topics[]? | contains("'"$TAG"'")))
+    ) | .full_name
+  ')
+fi
+
+# Ensure the list of repositories is unique
+UNIQUE_REPOS=$(echo "$REPOS" | sort -u)
+
+# Check if any repositories were found
+if [ -z "$UNIQUE_REPOS" ]; then
+  if [ -z "$TAG" ]; then
+    echo "No starred repositories found for user $USERNAME."
+  else
+    echo "No starred repositories found for user $USERNAME with tag '$TAG' in name, description, or topics."
+  fi
+  exit 0
+fi
+
+# Filter out repositories that are already cloned locally
+FILTERED_REPOS=""
+for REPO in $UNIQUE_REPOS; do
+  REPO_DIR=$(basename "$REPO")
+  if [ -d "$REPO_DIR" ]; then
+    echo "Skipping $REPO (already cloned)."
+  else
+    FILTERED_REPOS+="$REPO"$'\n'
+  fi
+done
+
+# Filter out empty values from the final list
+FILTERED_REPOS=$(echo "$FILTERED_REPOS" | grep -v '^$')
+
+# Check if any repositories are left after filtering
+if [ -z "$FILTERED_REPOS" ]; then
+  echo "No new repositories to clone."
+  exit 0
+fi
+
+# Clone all repositories if --all flag is provided
+if [ "$CLONE_ALL" = true ]; then
+  echo "Cloning all new repositories..."
+  for REPO in $FILTERED_REPOS; do
+    echo "Cloning $REPO..."
+    gh repo clone "$REPO"
+  done
+  echo "All new repositories have been cloned."
+  exit 0
+fi
+
+# Use fzf to create an interactive TUI for selecting repositories
+SELECTED_REPOS=$(echo "$FILTERED_REPOS" | fzf --multi --prompt="Select repositories to clone (TAB to select, ENTER to confirm): ")
+
+# Check if any repositories were selected
+if [ -z "$SELECTED_REPOS" ]; then
+  echo "No repositories selected. Exiting."
+  exit 0
+fi
+
+# Clone the selected repositories
+for REPO in $SELECTED_REPOS; do
+  echo "Cloning $REPO..."
+  gh repo clone "$REPO"
+done
+
+echo "Selected repositories have been cloned."

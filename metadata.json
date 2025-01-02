@@ -1,0 +1,8 @@
+{
+    "name": "stargazer-clone",
+    "description": "A gh extension to clone repositories from a user's stargazer list.",
+    "author": "Rodolfo Olivieri",
+    "repository": "https://github.com/r0x0d/gh-stargazer-clone",
+    "license": "MIT",
+    "version": "0.1.0"
+}
