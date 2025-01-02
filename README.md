@@ -20,3 +20,7 @@ Get started!
 ```
 gh stargaze-clone [--help] [--all] [username] [tag]
 ```
+
+## Acknowledgments
+
+Written mostly with [DeepSeek-Coder](https://github.com/deepseek-ai/DeepSeek-Coder)
